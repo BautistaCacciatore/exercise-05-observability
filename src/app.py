@@ -5,9 +5,19 @@ from sqlalchemy.orm import Session
 from src.database import Base, engine, get_db
 from src.models import Node
 from src.schemas import NodeCreate, NodeResponse, NodeUpdate
+from prometheus_client import Counter, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI()
+
+nodes_active = Gauge("nodes_active_total", "Cantidad de nodos activos registrados")
+nodes_created_total = Counter("nodes_created_total", "Total de nodos creados")
+nodes_deleted_total = Counter("nodes_deleted_total", "Total de nodos eliminados (soft delete)")
+
+
+@app.get("/metrics")
+def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 @app.get("/health")
 def health(db: Session = Depends(get_db)):
@@ -28,6 +38,8 @@ def register_node(node: NodeCreate, db: Session = Depends(get_db)):
     db.add(db_node)
     db.commit()
     db.refresh(db_node)
+    nodes_created_total.inc()
+    nodes_active.set(db.query(Node).filter(Node.status == "active").count())
     return db_node
 
 @app.get("/api/nodes", response_model=list[NodeResponse])
@@ -63,4 +75,6 @@ def delete_node(name: str, db: Session = Depends(get_db)):
     node.status = "inactive"
     node.updated_at = datetime.now(timezone.utc)
     db.commit()
+    nodes_deleted_total.inc()
+    nodes_active.set(db.query(Node).filter(Node.status == "active").count())
     return Response(status_code=204)
