@@ -1,11 +1,12 @@
 from datetime import datetime, timezone
-from fastapi import Depends, FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from src.database import Base, engine, get_db
 from src.models import Node
 from src.schemas import NodeCreate, NodeResponse, NodeUpdate
-from prometheus_client import Counter, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
+import time
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI()
@@ -13,6 +14,19 @@ app = FastAPI()
 nodes_active = Gauge("nodes_active_total", "Cantidad de nodos activos registrados")
 nodes_created_total = Counter("nodes_created_total", "Total de nodos creados")
 nodes_deleted_total = Counter("nodes_deleted_total", "Total de nodos eliminados (soft delete)")
+http_requests_total = Counter("http_requests_total", "Total de requests HTTP", ["method", "endpoint", "status_code"])
+http_request_duration_seconds = Histogram("http_request_duration_seconds", "Duración de requests HTTP en segundos", ["method", "endpoint"])
+
+
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    t0 = time.perf_counter()
+    response = await call_next(request)
+    duration = time.perf_counter() - t0
+    endpoint = request.url.path
+    http_requests_total.labels(method=request.method, endpoint=endpoint, status_code=str(response.status_code)).inc()
+    http_request_duration_seconds.labels(method=request.method, endpoint=endpoint).observe(duration)
+    return response
 
 
 @app.get("/metrics")
